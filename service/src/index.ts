@@ -2,12 +2,13 @@ import express from 'express'
 import type { RequestProps } from './types'
 import type { ChatMessage } from './chatgpt'
 import { chatConfig, chatReplyProcess, currentModel } from './chatgpt'
-import { auth, authV2 } from './middleware/auth'
+import { auth, authV2, mlog, regCookie, turnstileCheck, verify } from './middleware/auth'
 import { limiter } from './middleware/limiter'
 import { isNotEmptyString,formattedDate } from './utils/is'
 import multer from "multer"
 import path from "path"
 import fs from "fs"
+import pkg from '../package.json'
 // const { createProxyMiddleware } = require('http-proxy-middleware');
 //import {createProxyMiddleware} from "http-proxy-middleware"
 import  proxy from "express-http-proxy"
@@ -16,13 +17,18 @@ import FormData  from 'form-data'
 import axios from 'axios';
 import AWS  from 'aws-sdk';
 import { v4 as uuidv4} from 'uuid';
-
+import { viggleProxyFileDo,viggleProxy, lumaProxy, runwayProxy, ideoProxy, ideoProxyFileDo, klingProxy, pikaProxy, udioProxy, runwaymlProxy, pixverseProxy, sunoProxy } from './myfun'
 
 
 const app = express()
 const router = express.Router()
 
-app.use(express.static('public'))
+app.use(express.static('public' ,{
+  // 设置响应头，允许带有查询参数的请求访问静态文件
+  setHeaders: (res, path, stat) => {
+    res.set('Cache-Control', 'public, max-age=1');
+  }
+} ))
 //app.use(express.json())
 app.use(bodyParser.json({ limit: '10mb' })); //大文件传输
 
@@ -89,10 +95,23 @@ router.post('/session', async (req, res) => {
     const uploadImgSize =  process.env.UPLOAD_IMG_SIZE?? "1" 
     const gptUrl = process.env.GPT_URL?? ""; 
     const theme = process.env.SYS_THEME?? "dark"; 
+    const isCloseMdPreview = process.env.CLOSE_MD_PREVIEW?true:false
+    const uploadType= process.env.UPLOAD_TYPE
+    const turnstile= process.env.TURNSTILE_SITE
+    const menuDisable= process.env.MENU_DISABLE??""
+    const visionModel= process.env.VISION_MODEL??""
+    const systemMessage= process.env.SYSTEM_MESSAGE??""
+    const customVisionModel= process.env.CUSTOM_VISION_MODELS??""
+    const backgroundImage = process.env.BACKGROUND_IMAGE ?? ""
+    let  isHk= (process.env.OPENAI_API_BASE_URL??"").toLocaleLowerCase().indexOf('-hk')>0
+    if(!isHk)  isHk= (process.env.LUMA_SERVER??"").toLocaleLowerCase().indexOf('-hk')>0
+    if(!isHk)  isHk= (process.env.VIGGLE_SERVER??"").toLocaleLowerCase().indexOf('-hk')>0
+    
 
-    const data= { disableGpt4,isWsrv,uploadImgSize,theme,
+    const data= { disableGpt4,isWsrv,uploadImgSize,theme,isCloseMdPreview,uploadType,
       notify , baiduId, googleId,isHideServer,isUpload, auth: hasAuth
       , model: currentModel(),amodel,isApiGallery,cmodels,isUploadR2,gptUrl
+      ,turnstile,menuDisable,visionModel,systemMessage,customVisionModel,backgroundImage,isHk
     }
     res.send({  status: 'Success', message: '', data})
   }
@@ -101,21 +120,8 @@ router.post('/session', async (req, res) => {
   }
 })
 
-router.post('/verify', async (req, res) => {
-  try {
-    const { token } = req.body as { token: string }
-    if (!token)
-      throw new Error('Secret key is empty')
-
-    if (process.env.AUTH_SECRET_KEY !== token)
-      throw new Error('密钥无效 | Secret key is invalid')
-
-    res.send({ status: 'Success', message: 'Verify successfully', data: null })
-  }
-  catch (error) {
-    res.send({ status: 'Fail', message: error.message, data: null })
-  }
-})
+router.post('/verify', verify)
+router.get('/reg', regCookie )
 
  const API_BASE_URL = isNotEmptyString(process.env.OPENAI_API_BASE_URL)
     ? process.env.OPENAI_API_BASE_URL
@@ -127,8 +133,9 @@ app.use('/mjapi',authV2 , proxy(process.env.MJ_SERVER?process.env.MJ_SERVER:'htt
     return req.originalUrl.replace('/mjapi', '') // 将URL中的 `/mjapi` 替换为空字符串
   },
   proxyReqOptDecorator: function (proxyReqOpts, srcReq) {
-    proxyReqOpts.headers['mj-api-secret'] = process.env.MJ_API_SECRET;
+    if(  process.env.MJ_API_SECRET ) proxyReqOpts.headers['mj-api-secret'] = process.env.MJ_API_SECRET;
     proxyReqOpts.headers['Content-Type'] = 'application/json';
+    proxyReqOpts.headers['Mj-Version'] = pkg.version;
     return proxyReqOpts;
   },
   //limit: '10mb'
@@ -209,7 +216,7 @@ if(isUpload){
      res.json({ error:`server is no open uploader `,created:Date.now() })
   });
 }
-app.use('/uploads',authV2 , express.static('uploads'));
+app.use('/uploads' , express.static('uploads'));
 
 // R2Client function
 const R2Client = () => {
@@ -276,7 +283,8 @@ app.use(
       let responseBody = await axios.post( url , formData, {
               headers: {
               Authorization: 'Bearer '+ process.env.OPENAI_API_KEY ,
-              'Content-Type': 'multipart/form-data'
+              'Content-Type': 'multipart/form-data',
+              'Mj-Version': pkg.version
             }
         })   ;
         // console.log('responseBody', responseBody.data  );
@@ -292,8 +300,10 @@ app.use(
   }
 );
 
+ 
+
 //代理openai 接口
-app.use('/openapi',authV2, proxy(API_BASE_URL, {
+app.use('/openapi' ,authV2, turnstileCheck, proxy(API_BASE_URL, {
   https: false, limit: '10mb',
   proxyReqPathResolver: function (req) {
     return req.originalUrl.replace('/openapi', '') // 将URL中的 `/openapi` 替换为空字符串
@@ -301,10 +311,42 @@ app.use('/openapi',authV2, proxy(API_BASE_URL, {
   proxyReqOptDecorator: function (proxyReqOpts, srcReq) {
     proxyReqOpts.headers['Authorization'] ='Bearer '+ process.env.OPENAI_API_KEY;
     proxyReqOpts.headers['Content-Type'] = 'application/json';
+    proxyReqOpts.headers['Mj-Version'] = pkg.version;
     return proxyReqOpts;
   },
   //limit: '10mb'
 }));
+
+//代理sunoApi 接口 
+app.use('/sunoapi' ,authV2,sunoProxy );
+app.use('/suno' ,authV2,sunoProxy );
+
+
+
+//代理luma 接口 
+app.use('/luma' ,authV2, lumaProxy  );
+app.use('/pro/luma' ,authV2, lumaProxy );
+
+//代理 viggle 文件
+app.use('/viggle/asset',authV2 ,  upload2.single('file'), viggleProxyFileDo );
+app.use('/pro/viggle/asset',authV2 ,  upload2.single('file'), viggleProxyFileDo );
+//代理 viggle  
+app.use('/viggle' ,authV2, viggleProxy);
+app.use('/pro/viggle' ,authV2, viggleProxy);
+
+app.use('/runwayml' ,authV2, runwaymlProxy  );
+app.use('/runway' ,authV2, runwayProxy  );
+app.use('/kling' ,authV2, klingProxy  );
+
+app.use('/ideogram/remix' ,authV2,  upload2.single('image_file'), ideoProxyFileDo  );
+app.use('/ideogram' ,authV2, ideoProxy  );
+app.use('/pika' ,authV2, pikaProxy  );
+app.use('/udio' ,authV2, udioProxy  );
+
+app.use('/pixverse' ,authV2, pixverseProxy  );
+
+
+
 
 
 app.use('', router)

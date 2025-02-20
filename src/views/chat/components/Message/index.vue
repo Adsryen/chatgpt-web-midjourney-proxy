@@ -9,7 +9,7 @@ import { t } from '@/locales'
 import { useBasicLayout } from '@/hooks/useBasicLayout'
 import { copyToClip } from '@/utils/copy'
 import { homeStore } from '@/store'
-import { getSeed, mlog ,mjImgUrl} from '@/api' 
+import { getSeed, mlog ,mjImgUrl, isDallImageModel} from '@/api' 
 
 interface Props {
   dateTime?: string
@@ -24,6 +24,7 @@ interface Props {
 interface Emit {
   (ev: 'regenerate'): void
   (ev: 'delete'): void
+  (ev: 'edit'): void
 }
 
 const props = defineProps<Props>()
@@ -38,7 +39,7 @@ const message = useMessage()
 
 const textRef = ref<HTMLElement>()
 
-const asRawText = ref(props.inversion)
+const asRawText = ref(props.inversion && homeStore.myData.session.isCloseMdPreview)
 
 const messageRef = ref<HTMLElement>()
 
@@ -53,6 +54,11 @@ const options = computed(() => {
       label: t('common.delete'),
       key: 'delete',
       icon: iconRender({ icon: 'ri:delete-bin-line' }),
+    },
+    {
+      label: t('common.edit'),
+      key: 'edit',
+      icon: iconRender({ icon: 'ri:edit-2-line' }),
     },
   ]
 
@@ -72,7 +78,7 @@ const options = computed(() => {
   return common
 })
 
-function handleSelect(key: 'copyText' | 'delete' | 'toggleRenderType' |'tts') {
+function handleSelect(key: 'copyText' | 'delete' | 'edit' | 'toggleRenderType' | 'tts') {
   switch (key) {
     case 'tts': 
       homeStore.setMyData({act:'gpt.ttsv2', actData:{ index:props.index , uuid:props.chat.uuid, text:props.text } });
@@ -85,6 +91,9 @@ function handleSelect(key: 'copyText' | 'delete' | 'toggleRenderType' |'tts') {
       return
     case 'delete':
       emit('delete')
+      return
+    case 'edit':
+      emit('edit')
   }
 }
 
@@ -156,7 +165,8 @@ function handleRegenerate2() {
           :as-raw-text="asRawText"
           :chat="chat"
         />
-        <div class="flex flex-col" v-if="!chat.mjID && chat.model!='dall-e-3' && chat.model!='dall-e-2' ">
+        <!-- <div class="flex flex-col" v-if="!chat.mjID && chat.model!='dall-e-3' && chat.model!='dall-e-2' "> -->
+        <div class="flex flex-col" v-if="!chat.mjID &&   !isDallImageModel(chat.model) ">
           <!-- <button
             v-if="!inversion "
             class="mb-2 transition text-neutral-300 hover:text-neutral-800 dark:hover:text-neutral-300"
